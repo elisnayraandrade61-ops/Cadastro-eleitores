@@ -34,7 +34,38 @@ $('loginForm').onsubmit=async e=>{e.preventDefault();let{error}=await supabase.a
 async function start(){let{data:{session:s}}=await supabase.auth.getSession();if(s)await enter(s);else showAuth();supabase.auth.onAuthStateChange(async(_,s)=>s?await enter(s):showAuth())}function showAuth(){$('authView').classList.remove('hidden');$('appView').classList.add('hidden');if(ch){supabase.removeChannel(ch);ch=null}}
 async function enter(s){session=s;let{data:p,error}=await supabase.from('profiles').select('*').eq('id',s.user.id).single();if(error||!p||!p.active){msg('Acesso não liberado.','notice error');return supabase.auth.signOut()}profile=p;$('who').textContent=(p.display_name||p.email)+' • '+(p.role==='admin'?'Administrador':'Operador');document.querySelectorAll('.adminOnly').forEach(x=>x.classList.toggle('hidden',p.role!=='admin'));$('authView').classList.add('hidden');$('appView').classList.remove('hidden');await loadLeaders();await loadVoters();page('dashboard');if(ch)await supabase.removeChannel(ch);ch=supabase.channel('live').on('postgres_changes',{event:'*',schema:'public',table:'voters'},()=>loadVoters()).on('postgres_changes',{event:'*',schema:'public',table:'leaders'},()=>loadLeaders()).subscribe()}
 async function loadLeaders(){let{data,error}=await supabase.from('leaders').select('*').eq('active',true).order('name');if(error)return toast('Erro ao carregar lideranças');leaders=data||[];let o='<option value="">Selecione</option>'+leaders.map(l=>'<option value="'+l.id+'">'+esc(l.name)+'</option>').join('');$('leaderId').innerHTML=o;let leaderOpts='<option value="">Todas as lideranças</option>'+leaders.map(l=>'<option value="'+l.id+'">'+esc(l.name)+'</option>').join('');$('fLeader').innerHTML=leaderOpts;$('exportLeader').innerHTML=leaderOpts;$('leaderList').innerHTML=leaders.map(l=>'<div class="item"><b>'+esc(l.name)+'</b></div>').join('')}
-async function loadVoters(){let{data,error}=await supabase.from('voters').select('id,leader_id,full_name,phone,address,title_digits,zone,section,polling_place,municipality,tse_status,notes,leader:leaders(name)').order('full_name').limit(2000);if(error)return toast('Erro ao carregar cadastros');voters=data||[];renderRows();dash();renderTse();if(!$('p-pending').classList.contains('hidden'))renderPending()}
+async function loadVoters() {
+  const todos = [];
+  let inicio = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('voters')
+      .select('id,leader_id,full_name,phone,address,title_digits,zone,section,polling_place,municipality,tse_status,notes,leader:leaders(name)')
+      .order('full_name')
+      .order('id')
+      .range(inicio, inicio + 499);
+
+    if (error) {
+      toast('Erro ao carregar todos os cadastros. Tente novamente.');
+      return;
+    }
+
+    if (!data || data.length === 0) break;
+
+    todos.push(...data);
+    inicio += data.length;
+  }
+
+  voters = todos;
+  renderRows();
+  dash();
+  renderTse();
+
+  if (!$('p-pending').classList.contains('hidden')) {
+    renderPending();
+  }
+}
 function filt(){let q=$('search').value.trim().toLowerCase(),l=$('fLeader').value,s=$('fStatus').value;return voters.filter(v=>(!l||v.leader_id===l)&&(!s||v.tse_status===s)&&(!q||[v.full_name,v.phone,v.title_digits].some(x=>String(x||'').toLowerCase().includes(q))))}function renderRows(){$('rows').innerHTML=filt().map(v=>'<tr><td><button class="linkbtn edit" data-id="'+v.id+'">'+esc(v.full_name)+'</button></td><td>'+esc(v.leader?.name||'')+'</td><td class="titleMasked" title="Abra o cadastro para ver o número completo">'+esc(maskTitle(v.title_digits))+'</td><td>'+esc(v.phone||'—')+'</td><td>'+esc((v.zone||'—')+'/'+(v.section||'—'))+'</td><td><span class="badge '+v.tse_status+'">'+esc(lbl[v.tse_status])+'</span></td></tr>').join('');document.querySelectorAll('.edit').forEach(b=>b.onclick=()=>editVoter(b.dataset.id))}['search','fLeader','fStatus'].forEach(x=>$(x).oninput=renderRows);
 function dash(){$('kTotal').textContent=voters.length;$('kPending').textContent=voters.filter(v=>v.tse_status==='nao_consultado').length;$('kNoPhone').textContent=voters.filter(v=>!v.phone).length;$('kNoTitle').textContent=voters.filter(v=>!v.title_digits).length;let nameCounts=new Map();voters.forEach(v=>{let n=normName(v.full_name);if(n)nameCounts.set(n,(nameCounts.get(n)||0)+1)});$('kNameDup').textContent=[...nameCounts.values()].filter(n=>n>1).length;let c={};voters.forEach(v=>{let n=v.leader?.name||'Sem liderança';c[n]=(c[n]||0)+1});$('stats').innerHTML=Object.entries(c).sort((a,b)=>b[1]-a[1]).map(([n,v])=>'<div class="item row"><span>'+esc(n)+'</span><span class="spacer"></span><b>'+v+'</b></div>').join('')||'<p class="muted">Nenhum cadastro ainda.</p>'}
 function pendingMaps(){let nm=new Map(),pm=new Map();voters.forEach(v=>{let n=normName(v.full_name),p=dig(v.phone);if(n){if(!nm.has(n))nm.set(n,[]);nm.get(n).push(v.id)}if(p){if(!pm.has(p))pm.set(p,[]);pm.get(p).push(v.id)}});return{nm,pm}}
